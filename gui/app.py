@@ -195,6 +195,7 @@ class FindPersonApp(QWidget):
             self.worker = None
 
 
+
 # ===================== App Entry =====================
 
 def main():

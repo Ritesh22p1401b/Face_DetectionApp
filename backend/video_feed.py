@@ -16,11 +16,7 @@ class VideoFeed:
 
         cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
 
-        # -------------------------------------------------
-        # VIDEO WARM-UP (IMPORTANT FOR RECORDED VIDEOS)
-        # -------------------------------------------------
-        # Recorded videos often have unstable first frames.
-        # Skipping them prevents tracking glitches.
+        # ---- Warm-up for recorded video ----
         is_video_file = isinstance(self.finder.video_source, str)
         warmup_frames = 10 if is_video_file else 0
 
@@ -28,7 +24,6 @@ class VideoFeed:
             ret, _ = self.cap.read()
             if not ret:
                 break
-        # -------------------------------------------------
 
         while self.running:
             ret, frame = self.cap.read()
@@ -63,9 +58,12 @@ class VideoFeed:
         self._cleanup()
 
     def stop(self):
-        # Non-blocking stop (GUI-safe)
+        # Stop only video loop
         self.running = False
 
     def _cleanup(self):
         self.cap.release()
-        cv2.destroyAllWindows()
+        try:
+            cv2.destroyWindow("Find Person")
+        except cv2.error:
+            pass
