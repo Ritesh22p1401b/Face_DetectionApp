@@ -1,82 +1,150 @@
 import sys
 from PySide6.QtWidgets import (
-    QApplication, QWidget, QLabel, QPushButton, QFileDialog, QVBoxLayout
+    QApplication,
+    QWidget,
+    QLabel,
+    QPushButton,
+    QFileDialog,
+    QVBoxLayout,
+    QMessageBox,
 )
-from PySide6.QtCore import QTimer
-from PySide6.QtGui import QImage, QPixmap
-import cv2
+from PySide6.QtCore import Qt, QThread
+
 from face_encoder import FaceEncoder
 from webcam import VideoFinder
+from backend.video_feed import VideoFeed
 
-class FaceDetectionApp(QWidget):
+
+class VideoWorker(QThread):
+    """
+    Runs video processing in a separate thread
+    """
+
+    def __init__(self, reference_image_path, video_source):
+        super().__init__()
+        self.reference_image_path = reference_image_path
+        self.video_source = video_source
+
+    def run(self):
+        # Encode reference image
+        encoder = FaceEncoder()
+        reference_embedding = encoder.encode(self.reference_image_path)
+
+        # Create video finder
+        finder = VideoFinder(
+            reference_embedding=reference_embedding,
+            video_source=self.video_source,
+        )
+
+        # Start video feed
+        feed = VideoFeed(finder)
+        feed.start()
+
+
+class FindPersonApp(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Person Finder Desktop GUI")
-        self.setGeometry(100, 100, 800, 600)
+        self.setWindowTitle("Find Person System")
+        self.setFixedSize(420, 320)
 
-        # GUI Elements
-        self.video_label = QLabel(self)
-        self.start_webcam_btn = QPushButton("Start Webcam", self)
-        self.open_video_btn = QPushButton("Open Video File", self)
+        self.reference_image_path = None
+        self.video_path = None
+        self.worker = None
 
+        self._build_ui()
+
+    def _build_ui(self):
         layout = QVBoxLayout()
-        layout.addWidget(self.video_label)
-        layout.addWidget(self.start_webcam_btn)
-        layout.addWidget(self.open_video_btn)
+
+        title = QLabel("Person Finder")
+        title.setAlignment(Qt.AlignCenter)
+        title.setStyleSheet("font-size: 22px; font-weight: bold;")
+        layout.addWidget(title)
+
+        self.ref_label = QLabel("No reference image selected")
+        self.ref_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.ref_label)
+
+        btn_ref = QPushButton("Upload Reference Image")
+        btn_ref.clicked.connect(self.upload_reference_image)
+        layout.addWidget(btn_ref)
+
+        layout.addSpacing(10)
+
+        btn_live = QPushButton("Start Live Webcam")
+        btn_live.clicked.connect(self.start_live_feed)
+        layout.addWidget(btn_live)
+
+        layout.addSpacing(10)
+
+        btn_video = QPushButton("Upload Recorded Video")
+        btn_video.clicked.connect(self.upload_video)
+        layout.addWidget(btn_video)
+
+        btn_start_video = QPushButton("Start Recorded Video")
+        btn_start_video.clicked.connect(self.start_recorded_video)
+        layout.addWidget(btn_start_video)
+
         self.setLayout(layout)
 
-        # Signals
-        self.start_webcam_btn.clicked.connect(self.start_webcam)
-        self.open_video_btn.clicked.connect(self.open_video_file)
+    # ---------------- UI Actions ---------------- #
 
-        # Timer for updating frames
-        self.timer = QTimer()
-        self.timer.timeout.connect(self.update_frame)
+    def upload_reference_image(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Reference Image",
+            "",
+            "Images (*.jpg *.jpeg *.png)",
+        )
+        if path:
+            self.reference_image_path = path
+            self.ref_label.setText(path.split("/")[-1])
 
-        # Video capture
-        self.cap = None
-        self.finder = None
+    def upload_video(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Video File",
+            "",
+            "Videos (*.mp4 *.avi *.mov)",
+        )
+        if path:
+            self.video_path = path
 
-        # Encode reference face
-        encoder = FaceEncoder()
-        self.reference_embedding = encoder.encode("data/reference.jpg")
+    def start_live_feed(self):
+        if not self.reference_image_path:
+            QMessageBox.critical(
+                self, "Error", "Please upload a reference image first."
+            )
+            return
 
-    def start_webcam(self):
-        self.cap = cv2.VideoCapture(0)
-        self.finder = VideoFinder(self.reference_embedding, video_source=0)
-        self.timer.start(30)  # 30 ms → ~33 FPS
+        self.worker = VideoWorker(
+            reference_image_path=self.reference_image_path,
+            video_source=0,  # webcam
+        )
+        self.worker.start()
 
-    def open_video_file(self):
-        file_path, _ = QFileDialog.getOpenFileName(self, "Open Video File", "", "Video Files (*.mp4 *.avi *.mov)")
-        if file_path:
-            self.cap = cv2.VideoCapture(file_path)
-            self.finder = VideoFinder(self.reference_embedding, video_source=file_path)
-            self.timer.start(30)
+    def start_recorded_video(self):
+        if not self.reference_image_path or not self.video_path:
+            QMessageBox.critical(
+                self,
+                "Error",
+                "Please upload both reference image and video file.",
+            )
+            return
 
-    def update_frame(self):
-        if self.cap is not None and self.cap.isOpened():
-            ret, frame = self.cap.read()
-            if not ret:
-                self.timer.stop()
-                self.cap.release()
-                return
+        self.worker = VideoWorker(
+            reference_image_path=self.reference_image_path,
+            video_source=self.video_path,
+        )
+        self.worker.start()
 
-            frame = self.finder.detect_frame(frame)
 
-            # Convert OpenCV frame to QImage
-            rgb_image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            h, w, ch = rgb_image.shape
-            bytes_per_line = ch * w
-            qt_image = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format_RGB888)
-            self.video_label.setPixmap(QPixmap.fromImage(qt_image))
-
-    def closeEvent(self, event):
-        if self.cap is not None:
-            self.cap.release()
-        event.accept()
-
-if __name__ == "__main__":
+def main():
     app = QApplication(sys.argv)
-    window = FaceDetectionApp()
+    window = FindPersonApp()
     window.show()
     sys.exit(app.exec())
+
+
+if __name__ == "__main__":
+    main()
